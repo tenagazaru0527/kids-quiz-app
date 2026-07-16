@@ -8,6 +8,41 @@ import { useQuizData } from "./useQuizData.js";
 //   questions: [{ q, choices[4], answer(0-3), explanation }] }
 // ============================================================
 
+// Fisher-Yates シャッフル(元の配列は変更しない)
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// 出題順と各問題の選択肢をシャッフルしたクイズを返す。
+// answer は正解の選択肢文字列をシャッフル後の位置から引き直す
+function shuffleQuiz(quiz) {
+  const questions = shuffle(quiz.questions).map((q) => {
+    const correct = q.choices[q.answer];
+    const choices = shuffle(q.choices);
+    return { ...q, choices, answer: choices.indexOf(correct) };
+  });
+  return { ...quiz, questions };
+}
+
+// しぼりこみ結果のクイズ群から、count 問をランダムに抜き出した
+// 「ミックスクイズ」を作る(count が問題総数を超えたら全問)
+function buildMixedQuiz(quizList, count) {
+  const pool = quizList.flatMap((quiz) => quiz.questions);
+  const questions = shuffle(pool).slice(0, Math.min(count, pool.length));
+  return {
+    title: "おまかせミックス",
+    category: "ミックス",
+    emoji: "🎲",
+    difficulty: 0,
+    questions,
+  };
+}
+
 // 「NEW!」バッジを付ける日数
 const NEW_DAYS = 7;
 const isNew = (createdAt) => {
@@ -180,6 +215,11 @@ function QuizSelect({ quizzes, mode, onPick, onBack }) {
   const modeLabel = mode === "solo" ? "ひとりで挑戦" : "みんなで早押し";
   const modeColor = mode === "solo" ? "#4DA3FF" : "#FF5D6C";
 
+  // おまかせミックス: 表示中クイズの全問題からランダムに何問出すか
+  const MIX_CHOICES = [5, 10, 15, 20];
+  const [mixCount, setMixCount] = useState(10);
+  const poolSize = list.reduce((n, { quiz }) => n + quiz.questions.length, 0);
+
   return (
     <div style={{ ...S.root, padding: "28px 36px", boxSizing: "border-box", overflowY: "auto", height: "100vh" }}>
       {/* ヘッダー */}
@@ -301,6 +341,73 @@ function QuizSelect({ quizzes, mode, onPick, onBack }) {
         )}
       </div>
 
+      {/* おまかせミックス(しぼりこみ結果の全問題からランダム出題) */}
+      {list.length > 0 && (
+        <div
+          style={{
+            background: "#23244A",
+            border: `2px solid ${modeColor}`,
+            borderRadius: 20,
+            padding: "16px 20px",
+            marginBottom: 24,
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ fontSize: 34, lineHeight: 1 }}>🎲</div>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <div style={{ fontSize: 19, fontWeight: 800 }}>おまかせミックス</div>
+            <div style={{ fontSize: 13, color: "#B9BBE0", marginTop: 2 }}>
+              いま表示中の {list.length} クイズ・全{poolSize}問の中からランダムに出題
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {MIX_CHOICES.map((n) => {
+              const tooMany = n > poolSize; // 問題が足りない選択肢は選べない
+              return (
+                <button
+                  key={n}
+                  onClick={() => setMixCount(n)}
+                  disabled={tooMany}
+                  style={{
+                    fontFamily: FONT,
+                    fontSize: 16,
+                    fontWeight: 800,
+                    padding: "10px 16px",
+                    borderRadius: 999,
+                    border: mixCount === n ? `2px solid ${modeColor}` : "2px solid #34366B",
+                    background: mixCount === n ? modeColor : "transparent",
+                    color: mixCount === n ? "#fff" : "#8B8DBB",
+                    opacity: tooMany ? 0.3 : 1,
+                    cursor: tooMany ? "default" : "pointer",
+                  }}
+                >
+                  {n}問
+                </button>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => onPick(buildMixedQuiz(list.map(({ quiz }) => quiz), mixCount))}
+            style={{
+              fontFamily: FONT,
+              fontSize: 18,
+              fontWeight: 800,
+              padding: "12px 30px",
+              borderRadius: 14,
+              border: "none",
+              background: modeColor,
+              color: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            スタート!
+          </button>
+        </div>
+      )}
+
       {/* クイズカード */}
       {list.length === 0 ? (
         <div style={{ color: "#8B8DBB", fontSize: 18, textAlign: "center", marginTop: 60 }}>
@@ -311,7 +418,7 @@ function QuizSelect({ quizzes, mode, onPick, onBack }) {
           {list.map(({ quiz, index }) => (
             <button
               key={index}
-              onClick={() => onPick(index)}
+              onClick={() => onPick(quiz)}
               style={{
                 fontFamily: FONT,
                 textAlign: "left",
@@ -368,7 +475,9 @@ function QuizSelect({ quizzes, mode, onPick, onBack }) {
 // ============================================================
 // ひとりモード
 // ============================================================
-function SoloMode({ quiz, onExit }) {
+function SoloMode({ quiz: quizProp, onExit }) {
+  // 開始時に1回だけシャッフル(再レンダリングでは変わらない)
+  const [quiz] = useState(() => shuffleQuiz(quizProp));
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState(null);
   const [score, setScore] = useState(0);
@@ -463,7 +572,9 @@ function SoloMode({ quiz, onExit }) {
 // ============================================================
 // 早押しモード
 // ============================================================
-function BuzzerMode({ quiz, onExit }) {
+function BuzzerMode({ quiz: quizProp, onExit }) {
+  // 開始時に1回だけシャッフル(再レンダリングでは変わらない)
+  const [quiz] = useState(() => shuffleQuiz(quizProp));
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState("open"); // open | answering | reveal | flash
   const [buzzed, setBuzzed] = useState(null); // player id
@@ -678,7 +789,7 @@ export default function App() {
   const { quizzes, status, error, reload } = useQuizData();
   const [screen, setScreen] = useState("home"); // home | select | play
   const [mode, setMode] = useState(null); // solo | buzzer
-  const [quizIdx, setQuizIdx] = useState(0);
+  const [quiz, setQuiz] = useState(null); // 選ばれたクイズ(ミックスの場合は合成されたもの)
 
   if (status === "loading") return <LoadingScreen />;
   if (status === "error") return <ErrorScreen error={error} onRetry={reload} />;
@@ -699,8 +810,8 @@ export default function App() {
       <QuizSelect
         quizzes={quizzes}
         mode={mode}
-        onPick={(i) => {
-          setQuizIdx(i);
+        onPick={(picked) => {
+          setQuiz(picked);
           setScreen("play");
         }}
         onBack={() => setScreen("home")}
@@ -708,7 +819,6 @@ export default function App() {
     );
   }
 
-  const quiz = quizzes[quizIdx];
   const exit = () => setScreen("home");
 
   return mode === "solo" ? <SoloMode quiz={quiz} onExit={exit} /> : <BuzzerMode quiz={quiz} onExit={exit} />;
