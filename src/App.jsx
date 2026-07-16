@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { useQuizData } from "./useQuizData.js";
 
 // ============================================================
@@ -156,9 +156,18 @@ function Home({ onSelect }) {
 // ============================================================
 // クイズ選択画面
 // ============================================================
-function QuizSelect({ quizzes, mode, onPick, onBack }) {
+function QuizSelect({ quizzes, mode, answerTime, setAnswerTime, onPick, onBack }) {
   // ジャンル一覧はデータから自動生成(=Driveのフォルダがそのまま増える)
   const categories = Array.from(new Set(quizzes.map((q) => q.category)));
+
+  // ジャンルごとに「実際に存在するレベル」を集める。
+  // 存在しない(ジャンル, レベル)の組はトグルを出さない
+  const levelsByCat = {};
+  quizzes.forEach((q) => {
+    const lv = q.difficulty || 1;
+    if (!levelsByCat[q.category]) levelsByCat[q.category] = new Set();
+    levelsByCat[q.category].add(lv);
+  });
 
   // ジャンルごとに「出すレベル」を個別にON/OFF(初期値: すべてON)
   const [filters, setFilters] = useState(() => {
@@ -182,8 +191,12 @@ function QuizSelect({ quizzes, mode, onPick, onBack }) {
     });
 
   // 要約テキスト(閉じている時に現在の状態がわかるように)
-  const totalCells = categories.length * 3;
-  const onCells = categories.reduce((n, c) => n + [1, 2, 3].filter((lv) => filters[c]?.[lv]).length, 0);
+  // ※存在する(ジャンル, レベル)の組だけを数える
+  const totalCells = categories.reduce((n, c) => n + levelsByCat[c].size, 0);
+  const onCells = categories.reduce(
+    (n, c) => n + [...levelsByCat[c]].filter((lv) => filters[c]?.[lv]).length,
+    0
+  );
   const filterSummary =
     onCells === totalCells ? "すべて表示中" : onCells === 0 ? "すべてOFF(なにも表示されないよ)" : `しぼりこみ中(${categories.filter((c) => filters[c][1] || filters[c][2] || filters[c][3]).length}/${categories.length}ジャンル)`;
 
@@ -237,6 +250,33 @@ function QuizSelect({ quizzes, mode, onPick, onBack }) {
           ← もどる
         </button>
       </div>
+
+      {/* こたえる時間(早押しモードのみ) */}
+      {mode === "buzzer" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 16, fontWeight: 700 }}>⏱ こたえる時間</span>
+          {[5, 10, 15, 0].map((sec) => (
+            <button
+              key={sec}
+              onClick={() => setAnswerTime(sec)}
+              style={{
+                fontFamily: FONT,
+                fontSize: 15,
+                fontWeight: 800,
+                padding: "8px 18px",
+                borderRadius: 999,
+                border: answerTime === sec ? `2px solid ${modeColor}` : "2px solid #34366B",
+                background: answerTime === sec ? modeColor : "transparent",
+                color: answerTime === sec ? "#fff" : "#8B8DBB",
+                cursor: "pointer",
+              }}
+            >
+              {sec === 0 ? "むせいげん" : `${sec}秒`}
+            </button>
+          ))}
+          <span style={{ fontSize: 13, color: "#565880" }}>ボタンを押してから答えるまでの時間。すぎたらおてつき扱い</span>
+        </div>
+      )}
 
       {/* ジャンル × レベル フィルタ(折りたたみ式) */}
       <div style={{ background: "#1F2040", border: "2px solid #2B2C58", borderRadius: 18, marginBottom: 24, overflow: "hidden" }}>
@@ -310,8 +350,26 @@ function QuizSelect({ quizzes, mode, onPick, onBack }) {
                 >
                   {cat}
                 </button>
-                {[1, 2, 3].map((lv) => {
+                {[...levelsByCat[cat]].sort().map((lv) => {
                   const on = f[lv];
+                  // レベルが1つしかないジャンルはトグル不要(ジャンル名のON/OFFと同じになるため)
+                  // → ★を目安として表示するだけにする
+                  if (levelsByCat[cat].size === 1) {
+                    return (
+                      <span
+                        key={lv}
+                        style={{
+                          fontSize: 15,
+                          fontWeight: 800,
+                          letterSpacing: 1,
+                          padding: "8px 4px",
+                          color: anyOn ? "#FFC24D" : "#565880",
+                        }}
+                      >
+                        {"★".repeat(lv)}
+                      </span>
+                    );
+                  }
                   return (
                     <button
                       key={lv}
@@ -572,7 +630,7 @@ function SoloMode({ quiz: quizProp, onExit }) {
 // ============================================================
 // 早押しモード
 // ============================================================
-function BuzzerMode({ quiz: quizProp, onExit }) {
+function BuzzerMode({ quiz: quizProp, answerTime, onExit }) {
   // 開始時に1回だけシャッフル(再レンダリングでは変わらない)
   const [quiz] = useState(() => shuffleQuiz(quizProp));
   const [idx, setIdx] = useState(0);
@@ -581,6 +639,7 @@ function BuzzerMode({ quiz: quizProp, onExit }) {
   const [lockedOut, setLockedOut] = useState([]); // player ids wrong this question
   const [scores, setScores] = useState([0, 0, 0, 0]);
   const [lastResult, setLastResult] = useState(null); // {pid, correct}
+  const [timeLeft, setTimeLeft] = useState(null); // 回答の残り秒数(answerTime=0 なら使わない)
   const [done, setDone] = useState(false);
 
   const q = quiz.questions[idx];
@@ -595,24 +654,45 @@ function BuzzerMode({ quiz: quizProp, onExit }) {
     [phase, lockedOut]
   );
 
+  // 誤答・タイムアップ共通: ロックアウトしてバズ権を残りの人に戻す
+  const miss = useCallback(() => {
+    setLastResult({ pid: buzzed, correct: false });
+    const newLocked = [...lockedOut, buzzed];
+    setLockedOut(newLocked);
+    setBuzzed(null);
+    setPhase(newLocked.length >= PLAYERS.length ? "reveal" : "open"); // 全員ミス → 答えを公開
+  }, [buzzed, lockedOut]);
+
   const answer = (choiceIdx) => {
     if (phase !== "answering") return;
-    const correct = choiceIdx === q.answer;
-    setLastResult({ pid: buzzed, correct });
-    if (correct) {
+    if (choiceIdx === q.answer) {
+      setLastResult({ pid: buzzed, correct: true });
       setScores((s) => s.map((v, i) => (i === buzzed ? v + 10 : v)));
       setPhase("reveal");
     } else {
-      const newLocked = [...lockedOut, buzzed];
-      setLockedOut(newLocked);
-      setBuzzed(null);
-      if (newLocked.length >= PLAYERS.length) {
-        setPhase("reveal"); // 全員ミス → 答えを公開
-      } else {
-        setPhase("open"); // バズ権が残りの人に戻る
-      }
+      miss();
     }
   };
+
+  // 回答の制限時間(answering になったらカウントダウン、0でミス扱い)
+  useEffect(() => {
+    if (phase !== "answering" || !answerTime) {
+      setTimeLeft(null);
+      return;
+    }
+    setTimeLeft(answerTime);
+    const start = Date.now();
+    const id = setInterval(() => {
+      const remain = answerTime - Math.floor((Date.now() - start) / 1000);
+      if (remain <= 0) {
+        clearInterval(id);
+        miss();
+      } else {
+        setTimeLeft(remain);
+      }
+    }, 250);
+    return () => clearInterval(id);
+  }, [phase, buzzed]); // 回答者が変わるたびに仕切り直し
 
   const next = () => {
     if (idx + 1 >= quiz.questions.length) {
@@ -656,47 +736,6 @@ function BuzzerMode({ quiz: quizProp, onExit }) {
       </div>
     );
   }
-
-  // ---------- 回答パッド(押した人の側に表示) ----------
-  const answerPad = buzzedPlayer && phase === "answering" && (
-    <div
-      style={{
-        position: "absolute",
-        left: "50%",
-        [buzzedPlayer.flip ? "top" : "bottom"]: 90,
-        transform: `translateX(-50%) ${buzzedPlayer.flip ? "rotate(180deg)" : ""}`,
-        display: "flex",
-        gap: 14,
-        background: "rgba(0,0,0,0.35)",
-        padding: 14,
-        borderRadius: 20,
-        border: `3px solid ${buzzedPlayer.color}`,
-        zIndex: 5,
-      }}
-    >
-      {q.choices.map((_, i) => (
-        <button
-          key={i}
-          onTouchStart={(e) => { e.preventDefault(); answer(i); }}
-          onClick={() => answer(i)}
-          style={{
-            width: 76,
-            height: 76,
-            borderRadius: 16,
-            border: "none",
-            background: buzzedPlayer.color,
-            color: "#fff",
-            fontSize: 34,
-            fontWeight: 800,
-            fontFamily: FONT,
-            cursor: "pointer",
-          }}
-        >
-          {CIRCLED[i]}
-        </button>
-      ))}
-    </div>
-  );
 
   // ---------- コーナーの早押しボタン ----------
   const cornerPos = { tl: { top: 14, left: 14 }, tr: { top: 14, right: 14 }, bl: { bottom: 14, left: 14 }, br: { bottom: 14, right: 14 } };
@@ -752,18 +791,54 @@ function BuzzerMode({ quiz: quizProp, onExit }) {
         <div style={{ fontSize: 15, color: "#8B8DBB" }}>
           第{idx + 1}問 / {quiz.questions.length}問
           {phase === "answering" && buzzedPlayer && (
-            <span style={{ color: buzzedPlayer.color, fontWeight: 700 }}> — {buzzedPlayer.name} が回答中</span>
+            <span style={{ color: buzzedPlayer.color, fontWeight: 700 }}>
+              {" "}— {buzzedPlayer.name} が回答中
+              {timeLeft !== null && (
+                <span style={{ marginLeft: 10, fontSize: 20, fontWeight: 800, color: timeLeft <= 3 ? "#FF5D6C" : buzzedPlayer.color }}>
+                  ⏱ {timeLeft}
+                </span>
+              )}
+            </span>
           )}
         </div>
         <div style={{ fontSize: 28, fontWeight: 700, lineHeight: 1.5, margin: "12px 0" }}>{q.q}</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, textAlign: "left" }}>
-          {q.choices.map((c, i) => (
-            <div key={i} style={{ background: "#23244A", borderRadius: 12, padding: "12px 16px", fontSize: 19, fontWeight: 600 }}>
-              {CIRCLED[i]} {c}
-            </div>
-          ))}
+          {q.choices.map((c, i) =>
+            phase === "answering" ? (
+              // 回答中は選択肢そのものをタップして答える
+              <button
+                key={i}
+                onTouchStart={(e) => { e.preventDefault(); answer(i); }}
+                onClick={() => answer(i)}
+                style={{
+                  fontFamily: FONT,
+                  textAlign: "left",
+                  color: "#F4F5FF",
+                  background: "#23244A",
+                  borderRadius: 12,
+                  padding: "16px 16px",
+                  fontSize: 19,
+                  fontWeight: 600,
+                  border: `3px solid ${buzzedPlayer.color}`,
+                  boxShadow: `0 0 12px ${buzzedPlayer.color}55`,
+                  cursor: "pointer",
+                }}
+              >
+                {CIRCLED[i]} {c}
+              </button>
+            ) : (
+              <div key={i} style={{ background: "#23244A", borderRadius: 12, padding: "12px 16px", fontSize: 19, fontWeight: 600 }}>
+                {CIRCLED[i]} {c}
+              </div>
+            )
+          )}
         </div>
         {phase === "open" && <div style={{ marginTop: 12, color: "#8B8DBB", fontSize: 15 }}>わかったら自分のボタンを押せ!</div>}
+        {phase === "answering" && buzzedPlayer && (
+          <div style={{ marginTop: 12, color: buzzedPlayer.color, fontSize: 15, fontWeight: 700 }}>
+            こたえを直接タップ!
+          </div>
+        )}
       </div>
     );
 
@@ -771,7 +846,6 @@ function BuzzerMode({ quiz: quizProp, onExit }) {
     <div style={{ ...S.root, display: "flex", alignItems: "center", justifyContent: "center", padding: "150px 160px", boxSizing: "border-box", minHeight: "100vh" }}>
       {centerContent}
       {buzzButtons}
-      {answerPad}
       <button
         style={{ position: "absolute", top: "50%", right: 8, transform: "translateY(-50%)", background: "none", border: "none", color: "#565880", fontSize: 13, cursor: "pointer", fontFamily: FONT, writingMode: "vertical-rl" }}
         onClick={onExit}
@@ -790,6 +864,7 @@ export default function App() {
   const [screen, setScreen] = useState("home"); // home | select | play
   const [mode, setMode] = useState(null); // solo | buzzer
   const [quiz, setQuiz] = useState(null); // 選ばれたクイズ(ミックスの場合は合成されたもの)
+  const [answerTime, setAnswerTime] = useState(10); // 早押しの回答制限時間(秒)。0=むせいげん
 
   if (status === "loading") return <LoadingScreen />;
   if (status === "error") return <ErrorScreen error={error} onRetry={reload} />;
@@ -810,6 +885,8 @@ export default function App() {
       <QuizSelect
         quizzes={quizzes}
         mode={mode}
+        answerTime={answerTime}
+        setAnswerTime={setAnswerTime}
         onPick={(picked) => {
           setQuiz(picked);
           setScreen("play");
@@ -821,5 +898,5 @@ export default function App() {
 
   const exit = () => setScreen("home");
 
-  return mode === "solo" ? <SoloMode quiz={quiz} onExit={exit} /> : <BuzzerMode quiz={quiz} onExit={exit} />;
+  return mode === "solo" ? <SoloMode quiz={quiz} onExit={exit} /> : <BuzzerMode quiz={quiz} answerTime={answerTime} onExit={exit} />;
 }
