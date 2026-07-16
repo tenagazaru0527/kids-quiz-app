@@ -1,0 +1,16 @@
+{
+  "name": "クイズひろば",
+  "short_name": "クイズひろば",
+  "description": "家族で遊ぶクイズアプリ(ひとりモード+4人早押しモード)",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#191A33",
+  "theme_color": "#191A33",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
