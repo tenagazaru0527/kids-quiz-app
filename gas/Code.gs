@@ -55,8 +55,9 @@ function doGet(e) {
   if (!json) {
     const result = buildQuizData_();
     json = JSON.stringify(result);
-    // CacheService の上限(約100KB)を超える場合はキャッシュしない
-    if (json.length < 90000) {
+    // エラー時(クイズ0件)はキャッシュしない(修正がすぐ反映されるように)。
+    // また CacheService の上限(約100KB)を超える場合もキャッシュしない
+    if (result.quizzes.length > 0 && json.length < 90000) {
       cache.put("quizzes", json, CACHE_SECONDS);
     }
   }
@@ -71,15 +72,14 @@ function buildQuizData_() {
   const quizzes = [];
   const errors = [];
 
-  const rootIter = DriveApp.getFoldersByName(ROOT_FOLDER_NAME);
-  if (!rootIter.hasNext()) {
+  const root = findRootFolder_();
+  if (!root) {
     return {
       generatedAt: new Date().toISOString(),
       quizzes: [],
       errors: ["フォルダ「" + ROOT_FOLDER_NAME + "」が見つかりません。マイドライブに作成してください。"],
     };
   }
-  const root = rootIter.next();
 
   // サブフォルダ = ジャンル
   const genreFolders = root.getFolders();
@@ -129,6 +129,23 @@ function buildQuizData_() {
     quizzes: quizzes,
     errors: errors, // 壊れたファイルの一覧(アプリ側は無視する。checkQuizzes で確認用)
   };
+}
+
+/**
+ * ルートフォルダ(quizzes)を探す。
+ * 完全一致で見つからない場合、名前の前後に空白が紛れ込んだフォルダ
+ * (例:「quizzes 」)も救済して返す。
+ */
+function findRootFolder_() {
+  const exact = DriveApp.getFoldersByName(ROOT_FOLDER_NAME);
+  if (exact.hasNext()) return exact.next();
+
+  const fuzzy = DriveApp.searchFolders("title contains '" + ROOT_FOLDER_NAME + "'");
+  while (fuzzy.hasNext()) {
+    const f = fuzzy.next();
+    if (f.getName().trim() === ROOT_FOLDER_NAME) return f;
+  }
+  return null;
 }
 
 /**

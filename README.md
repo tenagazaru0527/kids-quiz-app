@@ -15,7 +15,7 @@
 | `gas/Code.gs` | Google Apps Script(Drive を走査して JSON 配信) |
 | `samples/` | クイズ JSON のサンプル(Drive に置く用) |
 | `docs/運用手順書.md` | 親向けの運用手順書 |
-| `.github/workflows/deploy.yml` | main への push で GitHub Pages に自動デプロイ |
+| `.github/workflows/deploy.yml` | main への push でビルドして `gh-pages` ブランチへ自動デプロイ(Actions が使えなければ `npm run deploy` で手元からも可) |
 | `quiz-app-prototype.jsx` | 元の UI プロトタイプ(参照用) |
 
 ## 開発
